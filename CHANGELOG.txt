@@ -1,0 +1,22 @@
+1.1a1:
+	added CHANGELOG.txt
+	math: added abs, int
+	modes: added auto, fix, sci, eng, mode
+	control: added run, ?, quoted strings
+	cmdline: added support for filenames at cmdline
+	internal: abstracted stack access, mode access;
+	  added process_line, run_file
+
+
+1.0b3:
+	second public version
+	features:
+	   Quit and No-op:                   q _
+	   Stack Operations                  r c d p f n
+	   Mode Operations                   k K deg rad
+	   Register Operations               sX lX
+	   Arithmetic and Algebra            + - * / % ^ v ! rec neg
+	   Trigonometry and Exponents        sin cos tan asin acos atan pi 
+	                                      e exp ln log
+	   Complex Value Conversion          pol rect
+

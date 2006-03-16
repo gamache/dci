@@ -1,0 +1,1138 @@
+#!/usr/bin/perl
+use strict;
+
+##############################################################################
+#
+# dci
+#
+# an RPN stack-based scientific calculator for console users;
+# an improved (but not 100% compatible) /usr/bin/dc for engineers
+#
+# copyright 2006  pete gamache  gamache at gmail dot com
+#
+# DCI is offered free of charge from http://dci.sf.net and is distributed 
+# under the Perl Artistic License, the text of which appears at the end of
+# this document.
+#
+##############################################################################
+
+
+### globals
+
+my $VERSION = "1.1a1";
+
+my @STACK = ();			# the almighty stack
+my @REGS  = ();			# registers 0-255
+
+my $PREC  = 4;			# output decimal-place precision
+my $DISPMODE = 'auto';  # value display mode
+my $DEGRAD= 'deg';		# degrees/radians mode
+
+my @HIST  = ();			# argument history
+my $LASTLINE;			# most recent line of user input
+
+my $E	  = 2.718281828459;
+my $PI	  = 3.141592653589;
+
+my $DEBUG = 0;
+
+
+
+
+
+### command line arguments
+
+if (my $arg = shift) {
+	if ($arg =~ /-h/i) {
+		print usage();
+		exit 0;
+	}
+	elsif ($arg =~ /-l/i) {
+		print readme();
+		exit 0;
+	}
+	elsif ($arg =~ /-d/i) {
+		$DEBUG = 1;
+	}
+	elsif (-f $arg) {
+		run_file ($arg);
+		exit 0;
+	}
+}
+
+
+
+
+
+INPUT_LOOP:
+while ($LASTLINE = <>) {
+	chomp $LASTLINE;
+	process_line ($LASTLINE);
+}
+
+
+
+
+### subroutines
+
+
+sub run_file {
+	my $fn = shift;
+	
+	open FILE, $fn or die $!;
+	while (<FILE>) {
+		process_line ($_);
+	}
+	close FILE;
+}
+
+
+sub process_line {
+	my $line = shift;
+	chomp $line;
+	
+	my @input = split /( (?:'[^']*') | (?:"[^"]*") | (?:\#.*) | \S+)  \s*/x, $line;
+	foreach my $arg (@input) {
+		process_arg ($arg);
+	}
+}
+
+
+
+
+sub process_arg {
+	my $arg = shift;
+	
+	return if $arg eq '';			# ignore whitespace
+	return if $arg =~ /^#/;			# ignore comments
+	
+	
+	debug ("entered process_arg: \$arg = $arg");
+	
+	
+
+
+	### quoted string
+	
+	if ($arg =~ /^(['"].*['"])$/) {
+		my $str = $1;
+		stack_push ($str);
+	}
+	
+	
+	
+	### number -- push it onto the stack
+	
+	elsif ($arg =~ /^(-?[\d\.]+)/) {
+		my $n = $1;
+		$arg =~ s/^$n//;
+		
+		if ($arg =~ /^e([+\-]?)(\d+)/i) {
+			$n = ($1 eq '-'  ?  $n / (10**$2)  :  $n * (10**$2));
+			$arg =~ s/^e$1$2//;
+		}
+		
+		
+
+		debug ("pushing $n onto stack");
+		stack_push($n);
+		unshift @HIST, $n;
+		
+
+		process_arg ($arg);
+	}
+	
+	
+	
+	
+	## control commands: q _ ?
+	
+	elsif ($arg eq 'q') {
+		exit 0;
+	}
+	
+	elsif ($arg eq '_') {
+		# no op
+	}
+	
+	elsif ($arg eq '?') {
+		printf ("? ");
+		my $input = <STDIN>;
+		chomp $input;
+		stack_push ($input);
+	}
+	
+	elsif ($arg eq 'run') {
+		err_chkunder ($arg, 1);
+		
+		my $v1 = stack_pop();
+		
+		err_chkstr ($v1);
+		
+		$v1 =~ s/^['"]//;
+		$v1 =~ s/['"]$//;
+	
+		err_chkfile ($v1);
+		
+		run_file ($v1);
+	}
+	
+
+	
+	## arithmetic: +-*/^%v (not implemented: ~| )
+	
+	elsif ($arg eq '+') {
+		err_chkunder ($arg, 2);
+	
+		my $v1 = stack_pop();
+		my $v2 = stack_pop();
+		
+		stack_push($v2+$v1);
+	}
+	elsif ($arg eq '-') {
+		err_chkunder ($arg, 2);
+	
+		my $v1 = stack_pop();
+		my $v2 = stack_pop();
+		
+		stack_push($v2-$v1);
+	}
+	elsif ($arg eq '*') {
+		err_chkunder ($arg, 2);
+	
+		my $v1 = stack_pop();
+		my $v2 = stack_pop();
+		
+		stack_push($v2*$v1);
+	}
+	elsif ($arg eq '/') {
+		err_chkunder ($arg, 2);
+	
+		my $v1 = stack_pop();
+		my $v2 = stack_pop();
+		
+		stack_push($v2/$v1);
+	}
+	elsif ($arg eq '^') {
+		err_chkunder ($arg, 2);
+	
+		my $v1 = stack_pop();
+		my $v2 = stack_pop();
+		
+		stack_push($v2**$v1);
+	}
+	elsif ($arg eq '%' || $arg eq 'mod') {
+		err_chkunder ($arg, 2);
+	
+		my $v1 = stack_pop();
+		my $v2 = stack_pop();
+		
+		stack_push($v2%$v1);
+	}
+	elsif ($arg eq 'v' || $arg eq 'sqrt') {
+		err_chkunder ($arg, 1);
+	
+		my $v1 = stack_pop();
+		
+		stack_push(sqrt($v1));
+	}
+	elsif ($arg eq 'V') {
+		err_chkunder ($arg, 2);
+		
+		my $v1 = stack_pop();
+		my $v2 = stack_pop();
+		
+		stack_push($v2**(1/$v1));
+	}
+	elsif ($arg eq '!' || $arg eq 'fact') {
+		err_chkunder ($arg, 1);
+		
+		my $v1 = stack_pop();
+		
+		$v1 = abs int $v1;
+		
+		$v1=1 if $v1==0;
+		
+		my $f = 1;
+		while ($v1 > 0) {
+			$f *= $v1;
+			$v1--;
+		}
+		
+		stack_push($f);
+	}
+	
+	## stack commands: cdr
+	
+	elsif ($arg eq 'c') {
+		@STACK = ();
+	}
+	
+	elsif ($arg eq 'd') {
+		err_chkunder ($arg, 1);
+		
+		my $v1 = stack_pop();
+		
+		stack_push($v1);
+		stack_push($v1);
+	}
+	
+	elsif ($arg eq 'r') {
+		err_chkunder ($arg, 2);
+		
+		my $v1 = stack_pop();
+		my $v2 = stack_pop();
+		
+		stack_push($v1);
+		stack_push($v2);
+	}
+	
+	
+	## output mode commands: kK auto fix sci eng mode
+	
+	elsif ($arg eq 'k') {
+		err_chkunder ($arg, 1);
+		
+		my $v1 = stack_pop();
+		
+		$PREC = abs int $v1;
+	}
+	
+	elsif ($arg eq 'K') {		
+		stack_push($PREC);
+	}
+	
+	elsif ($arg eq 'auto') {
+		set_auto();
+	}
+	
+	elsif ($arg eq 'fix') {
+		set_fix();
+	}
+	
+	elsif ($arg eq 'sci') {
+		set_sci();
+	}
+	
+	elsif ($arg eq 'eng') {
+		set_eng();
+	}
+	
+	elsif ($arg eq 'mode') {
+		dci_print ("'display mode: $DISPMODE, decimal precision $PREC, angle mode: $DEGRAD'");
+	}
+	
+	
+	## printing commands: pnf (TODO: P)
+	
+	elsif ($arg eq 'p') {
+		err_chkunder ($arg, 1);
+		
+		stack_print (1);
+	}
+	
+	elsif ($arg eq 'n') {
+		err_chkunder ($arg, 1);
+		
+		my $v1 = stack_pop();
+		
+		dci_print ($v1);
+	}
+	
+	elsif ($arg eq 'f') {
+		stack_print (0);
+	}
+	
+	
+	
+	
+	
+	
+	
+	## logarithms and e
+	
+	elsif ($arg eq 'ln') {
+		err_chkunder ($arg, 1);
+		
+		my $v1 = stack_pop();
+		
+		stack_push(log($v1));
+	}
+	
+	elsif ($arg eq 'log') {
+		err_chkunder ($arg, 1);
+		
+		my $v1 = stack_pop();
+		
+		stack_push(log($v1)/log(10));
+	}
+	
+	elsif ($arg eq 'exp') {
+		err_chkunder ($arg, 1);
+		
+		my $v1 = stack_pop();
+		
+		stack_push($E**$v1);
+	}
+	
+	elsif ($arg eq 'e') {
+		stack_push($E);
+	}
+	
+	
+	
+	## reciprocal, negation, absolute, integer
+	
+	elsif ($arg eq 'rec' || $arg eq 'recip') {
+		err_chkunder ($arg, 1);
+		
+		my $v1 = stack_pop();
+		
+		stack_push(1/$v1);
+	}
+	
+	elsif ($arg eq 'neg') {
+		err_chkunder ($arg, 1);
+		
+		my $v1 = stack_pop();
+		
+		stack_push(0-$v1);
+	}
+	
+	elsif ($arg eq 'abs') {
+		err_chkunder ($arg, 1);
+		
+		my $v1 = stack_pop();
+		
+		stack_push(abs($v1));
+	}
+	
+	elsif ($arg eq 'int') {
+		err_chkunder ($arg, 1);
+		
+		my $v1 = stack_pop();
+		
+		stack_push(int($v1));
+	}
+	
+	
+	
+	
+	
+	
+	## trigonometry and pi
+	
+	elsif ($arg eq 'pi') {
+		stack_push($PI);
+	}
+	
+	elsif ($arg eq 'deg') {
+		set_deg();
+	}
+	
+	elsif ($arg eq 'rad') {
+		set_rad();
+	}
+	
+	elsif ($arg eq 'sin') {
+		err_chkunder ($arg, 1);
+		
+		my $v1 = stack_pop();
+		if (is_deg()) {$v1 /= 180 / $PI}
+
+		stack_push(sin $v1);
+	}
+
+	elsif ($arg eq 'cos') {
+		err_chkunder ($arg, 1);
+		
+		my $v1 = stack_pop();	
+		if (is_deg()) {$v1 /= 180 / $PI}
+
+		stack_push(cos $v1);
+	}
+
+	elsif ($arg eq 'tan') {
+		err_chkunder ($arg, 1);
+		
+		my $v1 = stack_pop();
+		if (is_deg()) {$v1 /= 180 / $PI}
+
+		stack_push(sin ($v1) / cos ($v1));
+	}
+
+	elsif ($arg eq 'asin') {
+		err_chkunder ($arg, 1);
+		
+		my $v1 = stack_pop();
+		
+		my $out = atan2($v1, sqrt(1 - $v1*$v1));
+		if (is_deg()) {$out *= 180 / $PI}
+		
+		stack_push($out);
+	}
+
+	elsif ($arg eq 'acos') {
+		err_chkunder ($arg, 1);
+		
+		my $v1 = stack_pop();
+		
+		my $out = atan2(sqrt(1 - $v1*$v1), $v1);
+		if (is_deg()) {$out *= 180 / $PI}
+		
+		stack_push($out);
+	}
+
+	elsif ($arg eq 'atan') {
+		err_chkunder ($arg, 1);
+		
+		my $v1 = stack_pop();
+		
+		my $out = atan2 ($v1, 1);
+		if (is_deg()) {$out *= 180 / $PI}
+		
+		stack_push($out);
+	}
+	
+	
+	
+	## complex value conversion
+	
+	elsif ($arg eq 'pol' || $arg eq 'polar') {
+		err_chkunder ($arg, 2);
+		
+		my $x = stack_pop();
+		my $y = stack_pop();
+		
+		my $r = sqrt ($y*$y + $x*$x);
+		my $theta = atan2 ($y, $x);
+		if (is_deg()) {$theta *= 180 / $PI}
+		
+		stack_push($theta);
+		stack_push($r);
+	}
+	
+	elsif ($arg eq 'rect') {
+		err_chkunder ($arg, 2);
+		
+		my $r = stack_pop();
+		my $theta = stack_pop();
+		if (is_deg()) {$theta /= 180 / $PI}
+
+		
+		my $x = $r * cos ($theta);
+		my $y = $r * sin ($theta);
+		
+		stack_push($y);
+		stack_push($x);
+	}
+
+
+
+
+
+	## register commands
+	
+	elsif ($arg =~ /^l(.)/) {
+		err_noreg($1) if (!defined $REGS[ord $1]);
+		
+		stack_push($REGS[ord $1]);
+		unshift @HIST, $arg;
+		
+		process_arg (substr $arg, 2);
+		return;
+	}
+	
+	elsif ($arg =~ /^s(.)/) {
+		err_chkunder ($arg, 1);
+		
+		$REGS[ord $1] = stack_pop();
+		unshift @HIST, $arg;
+		
+		process_arg (substr $arg, 2);
+		return;
+	}
+	
+	
+	
+	
+	
+	## else process next character as a separate command
+
+	else {
+	    if ($arg =~ /^.$/) {
+	    	err_nocmd ($arg);
+	    }
+	    else {
+			process_arg (substr $arg, 0, 1);
+			process_arg (substr $arg, 1);
+			return;
+		}	
+	}
+	
+	unshift @HIST, $arg;
+}		
+	
+
+
+
+
+### error subroutines
+
+sub err_chkunder {
+#	test for stack underflow condition; error if so
+	my $arg = shift;
+	my $n = shift;
+	
+	if (scalar @STACK < $n) {	
+		print STDERR "--- stack underflow at '$arg' in line: '$LASTLINE'\n";
+		next INPUT_LOOP;
+	}
+}
+
+sub err_chkstr {
+#	test if a given value is a DCI string; error if not
+	my $arg = shift;
+	
+	if ($arg !~ /^['"].*['"]$/) {
+		print STDERR "--- value '$arg' is not a string in line: '$LASTLINE'\n";
+		next INPUT_LOOP;
+	}
+}
+
+sub err_chkfile {
+#	error if file not found
+	my $arg = shift;
+	
+	if (! -f $arg) {
+		print STDERR "--- file not found: '$arg' in line: '$LASTLINE'\n";
+		next INPUT_LOOP;
+	}
+}
+
+sub err_noreg {
+#	requested register does not exist
+	my $reg = shift;
+	
+	print STDERR "--- requested register '$reg' does not exist\n";
+	next INPUT_LOOP;
+}
+
+sub err_nocmd {
+# command does not exist
+	my $cmd = shift;
+	
+	print STDERR "--- no such command '$cmd' in line: '$LASTLINE'\n";
+	next INPUT_LOOP;
+}
+
+
+sub debug {
+	my $msg = shift;
+	print STDERR "$msg\n" if ($DEBUG == 1);
+}
+
+
+
+
+### print routine
+
+sub dci_print {
+	my $val = shift;
+	
+	if ($val =~ /^['"]/) {   		# it's a string
+		$val =~ s/^['"]//;
+		$val =~ s/['"]$//;
+		print "$val\n";
+	}
+	elsif (is_auto()) {
+		printf "%g\n", $val;
+	}
+	elsif (is_fix()) {
+		printf "%.*f\n", $PREC, $val;
+	}
+	elsif (is_sci()) {
+		printf "%.*e\n", $PREC, $val;
+	}
+	elsif (is_eng()) {
+		printf "%.*E\n", $PREC, $val;
+	}
+	else {
+		debug "something's weird with dci_print()";
+	}	
+}
+
+
+
+
+### mode abstraction: degrees/radians, auto/fix/sci/eng
+
+sub is_deg {
+	$DEGRAD eq 'deg' ? 1 : 0;
+}
+
+sub is_rad {
+	$DEGRAD eq 'rad' ? 1 : 0;
+}
+
+sub set_deg {
+	$DEGRAD = 'deg';
+}
+
+sub set_rad {
+	$DEGRAD = 'rad';
+}
+
+
+sub is_auto {
+	$DISPMODE eq 'auto' ? 1 : 0;
+}
+
+sub is_fix {
+	$DISPMODE eq 'fix'  ? 1 : 0;
+}
+
+sub is_sci {
+	$DISPMODE eq 'sci'  ? 1 : 0;
+}
+
+sub is_eng {
+	$DISPMODE eq 'eng'  ? 1 : 0;
+}
+
+sub set_auto {
+	$DISPMODE = 'auto';
+}
+
+sub set_fix {
+	$DISPMODE = 'fix';
+}
+
+sub set_sci {
+	$DISPMODE = 'sci';
+}
+
+sub set_eng {
+	$DISPMODE = 'eng';
+}
+
+
+
+
+
+
+
+
+
+
+
+### stack abstraction
+
+sub stack_pop {
+	my $v1 = shift @STACK;
+	debug ("popped $v1");
+	return $v1;
+}
+
+sub stack_push {
+	my $v1 = shift;
+	unshift @STACK, $v1;
+	debug ("pushed $v1")
+}
+
+sub stack_print {
+	my $n = shift;	
+	$n = scalar @STACK if $n==0;
+	for (my $i=0; $i<$n; $i++) {
+		dci_print ($STACK[$i]);
+	}
+}
+
+
+
+
+
+
+
+### help routines
+
+sub usage {
+sprintf <<EOT
+
+DCI, an RPN scientific calculator for console users  --  http://dci.sf.net
+version $VERSION, copyright 2006 pete gamache <gamache at gmail dot com>
+
+Usage: dci                           run dci
+       dci -help                     print short help message
+       dci -longhelp                 print full manual (README.txt)
+       dci -l | more                 as above, but see it one page at a time
+
+Command Summary:
+
+   Control Commands:                 q _ ? run
+   Stack Operations                  r c d p f n
+   Mode Operations                   auto fix sci eng k K deg rad mode
+   Store and Recall                  sX lX
+   Arithmetic and Algebra            + - * / %% ^ v ! rec neg abs int
+   Trigonometry and Exponentials     sin cos tan asin acos atan pi e exp ln log
+   Complex Value Conversion          pol rect
+   
+EOT
+}
+
+
+
+sub readme {
+sprintf <<EOT
+DCI version $VERSION
+
+   AN RPN SCIENTIFIC CALCULATOR FOR CONSOLE USERS;
+
+   An Improved /usr/bin/dc for Engineers;
+
+   six hundred one.
+
+copyright 2006  pete gamache  gamache at gmail dot com
+
+
+LICENSE
+
+DCI is offered under the Perl Artistic License, which is available at
+http://www.perl.com/pub/a/language/misc/Artistic.html and at the end of 
+the DCI perl source code.
+
+DCI is offered free of charge at http://dci.sf.net and http://ftso.net/dci/.
+
+
+REQUIREMENTS
+
+A working Perl installation.
+
+
+INSTALLING DCI
+
+Installing DCI is as easy as copying the 'dci' file somewhere useful, 
+depending on your system.  In Macintosh, Unix, and Windows+Cygwin 
+environments, the directory "/usr/bin" will work, though you may prefer 
+"/usr/local/bin" or another to suit your (or your sysadmin's) preferences.
+
+You *do not* need to install DCI to launch and use it.  See below.
+
+
+STARTING DCI
+
+If you've installed DCI as described above, you need only type "dci" 
+at a shell prompt.
+
+If you have not installed dci system-wide, type:
+
+   cd dci-$VERSION
+   perl dci
+   
+at a shell (Macintosh/Unix/Cygwin) or command (Windows) prompt.
+
+
+USING DCI
+
+DCI is modeled after the function and feel of two calculators: /usr/bin/dc, 
+and the HP 32S-II handheld.  As such, it operates as a stack-based RPN 
+calculator.  DCI extends the familiar dc interface by adding common 
+scientific commands supporting logarithms, exponentials, trigonometry and
+complex values.
+
+Syntax:
+
+In a nutshell, an RPN (Reverse Polish Notation) calculator keeps an ordered 
+list of numbers called a "stack", and operates by taking numbers from and
+adding numbers to the top of the stack (the first number in the list).  For 
+instance, a multiplication would take ("pop") two values from the top of the 
+stack, multiply them, and leave ("push") the result on the top of the stack.
+RPN eliminates the need for parentheses in calculator operation.
+
+DCI commands can be separated by space, or interpreted one-after-another
+without whitespace, so long as ambiguous commands are not created.  A number
+counts as a command which pushes the given value onto the stack.  Strings 
+work the same way, and must be quoted at both ends with a single- or double-
+quote (' or ").
+
+For example, to divide 22 by 7 and then print the result, type:
+
+  22 7 / p                   # (or "22 7/p")
+
+You will see:
+
+  3.14286
+
+To calculate the square root of (25 + 81) without printing the result, you 
+could type:
+
+  25 81 + v                  # v is radical
+
+or
+
+  5 d * 9 d * + v            # d "duplicates" the top value on the stack
+
+or
+
+  5 sq 9 sq + v              # equivalent to above
+
+To see the inverse tangent of eleven-ninths, type:
+
+  11 9 / atan p
+
+  
+and so on.
+
+
+COMMANDS
+
+The convention V1, V2 etc. will be used to denote the first, second etc.
+values popped from the stack; V1 always means the value at top of the stack
+at the time a command is executes.
+
+Number format
+
+  A number can have a preceding minus character ('-') indicating a negative
+  value.  Values can also use "eXXX" notation to indicate a decimal exponent.
+  
+  Examples of valid numbers:
+  
+  1         .34       7e+8      -2        pi         # pi and e are
+  2.        5.6       9e-10     -0.2E1    e          # provided by DCI
+  
+Operational commands
+
+  q      Quits DCI.
+  _      No operation.  Note that it is an underscore, not a minus sign.
+  ?      Prints a "? " and accepts input from the user.  Input value is 
+         pushed onto the stack.
+  run    Pops a string value from the stack, and executes the file with
+         the given name.
+   
+Displaying the stack
+
+  p      Prints the top value on the stack, with newline.  Does not alter 
+         the stack.
+  n      Pops the first value off the stack, and prints it without a trailing
+         newline.
+  f      Prints the entire contents of the stack, with newlines.  Does not
+         alter the stack.
+
+Changing the stack
+
+  c      Clears the stack.
+  d      Duplicates the top value on the stack.
+  r      Reverses the order of the top two values on the stack.
+
+Changing display and operation modes
+
+  mode   Prints status of display mode.
+  auto   Sets 'auto' output mode.  Decimal-precision is ignored.
+  fix    Sets fixed-point output mode.
+  sci    Sets scientific-notation output mode.
+  eng    Sets engineering-notation output mode.
+  k      Pops V1, and sets the decimal-point precision for number display.
+  K      Pushes the current decimal-point precision onto the stack.
+  deg    Sets 'degrees' mode for display and computation.
+  rad    Sets 'radians' mode for display and computation.
+  
+Storing and recalling values
+ 
+  sX     Store.  'X' can be any character.  Pops V1 and stores it as X.
+  lX     Recall.  Retrieves the value under 'X' and pushes it on the stack.
+  
+Arithmetic
+
+  +      Add.  Pops V1 and V2, then pushes (V2+V1).
+  -      Subtract.  Pops V1 and V2, then pushes (V2-V1).
+  *      Multiply.  Pops V1 and V2, then pushes (V2*V1).
+  /      Divide.  Pops V1 and V2, then pushes (V2/V1).
+  
+  sq     Square.  Pops V1, and pushes (V1*V1).
+  ^      Exponent.  Pops V1 and V2, then pushes (V2^V1).
+  v      Square root.  Pops V1, then pushes sqrt(V1).
+  sqrt   (Same as v)
+  V      Root.  Pops V1 and V2, then pushes the V1th root of V2.
+  
+  %      Modulo.  Pops V1 and V2, then pushes the remainder of (V2/V1).
+  mod    (Same as %)
+  !      Factorial.  Pops V1 and converts it to a positive integer.
+         Computes V1*(V1-1)*(V1-2)*...*1 and pushes the result.
+         Note that 0! equals 1 by mathematical convention.
+  fact   (Same as !)
+  
+  rec    Reciprocal.  Pops V1, and pushes 1/V1.
+  recip  (Same as rec)
+  neg    Negate.  Pops V1, and pushes -V1.
+  abs    Absolute value.  Pops V1, and pushes |V1|.
+  int    Integer.  Pops V1, and pushes int(V1).
+         
+Exponentials and Logarithms
+
+  ln     Natural (base e) logarithm.  Pops V1, and pushes ln(V1).
+  log    Base 10 logarithm.  Pops V1, and pushes log10(V1).
+  exp    Exponential.  Pops V1, and pushes e to the power of V1.
+  
+Trigonometry
+
+  See 'deg' and 'rad' above about degrees/radians mode.
+  
+  sin    Sine.  Pops V1, and pushes the sine of V1.
+  asin   Arcsine.  Pops V1, and pushes the inverse sine of V1.
+  cos    Cosine.  Pops V1, and pushes the cosine of V1.
+  acos   Arccosine.  Pops V1, and pushes the inverse cosine of V1.
+  tan    Tangent.  Pops V1, and pushes the tangent of V1.
+  atan   Arctangent.  Pops V1, and pushes the inverse tangent of V1.
+  
+Complex Values
+
+  Complex (imaginary) values are represented by a pair of values on the 
+  stack.  In rectangular form, (X + iY) is represented by Y in V2, X in V1.
+  In polar form, R*exp(iTHETA) is represented by THETA in V2, R in V1. 
+  
+  pol    Convert rectangular form to polar form.  Pops X then Y, 
+         pushes THETA then R.
+  polar  (Same as pol)
+  rect   Convert polar form to rectangular form.  Pops R then THETA,
+         pushes Y then X.
+
+EOT
+}
+
+
+
+
+
+### Perl Artistic License follows.
+
+__END__
+
+The "Artistic License"
+
+Preamble
+
+The intent of this document is to state the conditions under which a
+Package may be copied, such that the Copyright Holder maintains some
+semblance of artistic control over the development of the package,
+while giving the users of the package the right to use and distribute
+the Package in a more-or-less customary fashion, plus the right to make
+reasonable modifications.
+
+Definitions:
+
+	"Package" refers to the collection of files distributed by the
+	Copyright Holder, and derivatives of that collection of files
+	created through textual modification.
+
+	"Standard Version" refers to such a Package if it has not been
+	modified, or has been modified in accordance with the wishes
+	of the Copyright Holder as specified below.
+
+	"Copyright Holder" is whoever is named in the copyright or
+	copyrights for the package.
+
+	"You" is you, if you're thinking about copying or distributing
+	this Package.
+
+	"Reasonable copying fee" is whatever you can justify on the
+	basis of media cost, duplication charges, time of people involved,
+	and so on.  (You will not be required to justify it to the
+	Copyright Holder, but only to the computing community at large
+	as a market that must bear the fee.)
+
+	"Freely Available" means that no fee is charged for the item
+	itself, though there may be fees involved in handling the item.
+	It also means that recipients of the item may redistribute it
+	under the same conditions they received it.
+
+1. You may make and give away verbatim copies of the source form of the
+Standard Version of this Package without restriction, provided that you
+duplicate all of the original copyright notices and associated disclaimers.
+
+2. You may apply bug fixes, portability fixes and other modifications
+derived from the Public Domain or from the Copyright Holder.  A Package
+modified in such a way shall still be considered the Standard Version.
+
+3. You may otherwise modify your copy of this Package in any way, provided
+that you insert a prominent notice in each changed file stating how and
+when you changed that file, and provided that you do at least ONE of the
+following:
+
+    a) place your modifications in the Public Domain or otherwise make them
+    Freely Available, such as by posting said modifications to Usenet or
+    an equivalent medium, or placing the modifications on a major archive
+    site such as uunet.uu.net, or by allowing the Copyright Holder to include
+    your modifications in the Standard Version of the Package.
+
+    b) use the modified Package only within your corporation or organization.
+
+    c) rename any non-standard executables so the names do not conflict
+    with standard executables, which must also be provided, and provide
+    a separate manual page for each non-standard executable that clearly
+    documents how it differs from the Standard Version.
+
+    d) make other distribution arrangements with the Copyright Holder.
+
+4. You may distribute the programs of this Package in object code or
+executable form, provided that you do at least ONE of the following:
+
+    a) distribute a Standard Version of the executables and library files,
+    together with instructions (in the manual page or equivalent) on where
+    to get the Standard Version.
+
+    b) accompany the distribution with the machine-readable source of
+    the Package with your modifications.
+
+    c) give non-standard executables non-standard names, and clearly
+    document the differences in manual pages (or equivalent), together
+    with instructions on where to get the Standard Version.
+
+    d) make other distribution arrangements with the Copyright Holder.
+
+5. You may charge a reasonable copying fee for any distribution of this
+Package.  You may charge any fee you choose for support of this
+Package.  You may not charge a fee for this Package itself.  However,
+you may distribute this Package in aggregate with other (possibly
+commercial) programs as part of a larger (possibly commercial) software
+distribution provided that you do not advertise this Package as a
+product of your own.  You may embed this Package's interpreter within
+an executable of yours (by linking); this shall be construed as a mere
+form of aggregation, provided that the complete Standard Version of the
+interpreter is so embedded.
+
+6. The scripts and library files supplied as input to or produced as
+output from the programs of this Package do not automatically fall
+under the copyright of this Package, but belong to whoever generated
+them, and may be sold commercially, and may be aggregated with this
+Package.  If such scripts or library files are aggregated with this
+Package via the so-called "undump" or "unexec" methods of producing a
+binary executable image, then distribution of such an image shall
+neither be construed as a distribution of this Package nor shall it
+fall under the restrictions of Paragraphs 3 and 4, provided that you do
+not represent such an executable image as a Standard Version of this
+Package.
+
+7. C subroutines (or comparably compiled subroutines in other
+languages) supplied by you and linked into this Package in order to
+emulate subroutines and variables of the language defined by this
+Package shall not be considered part of this Package, but are the
+equivalent of input as in Paragraph 6, provided these subroutines do
+not change the language in any way that would cause it to fail the
+regression tests for the language.
+
+8. Aggregation of this Package with a commercial distribution is always
+permitted provided that the use of this Package is embedded; that is,
+when no overt attempt is made to make this Package's interfaces visible
+to the end user of the commercial distribution.  Such use shall not be
+construed as a distribution of this Package.
+
+9. The name of the Copyright Holder may not be used to endorse or promote
+products derived from this software without specific prior written permission.
+
+10. THIS PACKAGE IS PROVIDED "AS IS" AND WITHOUT ANY EXPRESS OR
+IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
+WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
+
+				The End
+
+
