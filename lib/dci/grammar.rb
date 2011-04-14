@@ -1,46 +1,25 @@
-rules = <<-EOT
-  rule number
-    '-'? ( [0-9]+ '.' [0-9]*  /  '.'? [0-9]+ ) 
-    ([eE] [-+]? [0-9]+)? {
-      def is_number
-        true
-      end
-    }
+class DCI
+  def parser; self.class.parser; end
+  def self.parser
+    @@parser ||= RDParser.new do |g|
+      g.line    'term(s?) optional_space'
+      g.term    'optional_space atom'
+      g.atom    'number | string | command'
+      g.number  %r{(
+                    -?                          # optional negative sign
+                    (?: \d+ \. \d* | \.? \d+ )  # mantissa
+                    (?: [eE] [-+]? \d+)?        # optional exponent
+                )}x
+      g.string  %r{(
+                    (?: ' (?: \\ ' | [^'])* ' ) |
+                    (?: " (?: \\ " | [^"])* " )
+                )}x
+      g.command Regexp.new cmds.map(&:to_s).
+                                sort{|a,b| b.length <=> a.length}.
+                                map{|cmd| Regexp.quote(cmd)}.
+                                join('|')
+      g.optional_space /\s*/
+    end
   end
-
-  rule space
-    ' ' / "\t" / "\n"
-  end
-
-  rule string
-    '"' (!'"' . / '\' '"')* '"'
-  end
-
-  rule token
-    (
-      number   { def is_number; true; end  }
-      /
-      command  { def is_command; true; end }
-      /
-      string   { def is_string; true; end  }
-    )
-    { def is_token; true; end }
-  end
-
-  rule line
-    (space* token)* space*
-  end
-
-EOT
-
-rules += "rule command\n" +
-         DCI.cmds.
-             map(&:to_s).
-             sort{|a,b| b.length <=> a.length}.
-             map{|cmd| "'#{cmd}'"}.
-             join(' / ') +
-         "\nend\n"
-
-Treetop.load_from_string("grammar DCIGrammar\n#{rules}\nend")
-
+end
 

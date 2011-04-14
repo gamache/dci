@@ -1,8 +1,5 @@
 source "http://rubygems.org"
 
-gem 'polyglot'
-gem 'treetop'
-
 group :development do
   gem "shoulda", ">= 0"
   gem "bundler", "~> 1.0.0"
