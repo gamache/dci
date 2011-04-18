@@ -15,8 +15,8 @@ Jeweler::Tasks.new do |gem|
   gem.name = "dci"
   gem.homepage = "http://github.com/gamache/dci"
   gem.license = "MIT"
-  gem.summary = %Q{TODO: one-line summary of your gem}
-  gem.description = %Q{TODO: longer description of your gem}
+  gem.summary = %Q{/usr/bin/dc improved}
+  gem.description = %Q{dci is a console RPN scientific calculator, an improved /usr/bin/dc for engineers.}
   gem.email = "gamache@gmail.com"
   gem.authors = ["pete gamache"]
   # Include your dependencies below. Runtime dependencies are required when using your gem,
